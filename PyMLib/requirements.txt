@@ -1,0 +1,8 @@
+PyArrow
+pandas
+numpy
+
+tqdm
+
+seaborn
+matplotlib
