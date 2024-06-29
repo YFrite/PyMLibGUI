@@ -1,64 +1,178 @@
 import sys
-from PyQt5.QtWidgets import QPushButton, QWidget, QApplication, QMainWindow
-from PyQt5 import uic
-from PyQt5.QtCore import Qt, QMimeData
-from PyQt5.QtGui import QDrag
+from typing import Type
 
-from block import blocks
+import numpy as np
+import pandas as pd
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QPainter
+from PyQt5.QtWidgets import QApplication, QMainWindow, QGraphicsScene, QGraphicsView, QVBoxLayout, \
+    QWidget, QPushButton, QHBoxLayout, QGraphicsSimpleTextItem
+from sklearn.metrics import mean_squared_error
+
+from PyMLib.classifications import LogisticRegression
 from PyMLib.regressions import LinearRegression
+from block import BaseBlock, FeaturesInput, BlockType, TargetInput, Algorithm, Output
+from widgets.graph_arrow import Arrow
 
 
-class Button(QPushButton):
+class GraphicsView(QGraphicsView):
+    def __init__(self, scene):
+        super().__init__(scene)
+        self.setRenderHint(QPainter.Antialiasing)
+        self.setDragMode(QGraphicsView.RubberBandDrag)
+        self.start_item = None
+        self.current_arrow = None
 
-    def __init__(self, title, parent):
-        super().__init__(title, parent)
+    def mousePressEvent(self, event):
+        if event.button() == Qt.RightButton:
+            item = self.itemAt(event.pos())
+            if isinstance(item, BaseBlock):
+                self.start_item = item
+            elif isinstance(item, QGraphicsSimpleTextItem):
+                self.start_item = item.parentItem()
+            else:
+                item = None
 
-    def mouseMoveEvent(self, e):
+            if item:
+                self.current_arrow = Arrow(self.start_item)
+                self.scene().addItem(self.current_arrow)
 
-        if e.buttons() != Qt.RightButton:
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        super().mouseMoveEvent(event)
+        if not self.current_arrow:
             return
 
-        mimeData = QMimeData()
+        self.current_arrow.update_path(self.mapToScene(event.pos()))
 
-        drag = QDrag(self)
-        drag.setMimeData(mimeData)
-        drag.setHotSpot(e.pos() - self.rect().topLeft())
+    def connect_graph(self, event):
+        if not self.current_arrow:
+            return
 
-        dropAction = drag.exec_(Qt.MoveAction)
+        item = self.itemAt(event.pos())
 
-    def mousePressEvent(self, e):
+        if isinstance(item, BaseBlock):
+            item = item
+        elif isinstance(item, QGraphicsSimpleTextItem):
+            item = item.parentItem()
+        else:
+            item = None
 
-        QPushButton.mousePressEvent(self, e)
+        if (item and not (self.start_item == item)
+                and item.__block_type__ in BlockType.can_connect(self.start_item.__block_type__)):
+            self.current_arrow.set_end_item(item)
+            item.inputs.append(self.start_item)
+        else:
+            self.scene().removeItem(self.current_arrow)
+            self.current_arrow.remove_arrow()
 
-        if e.button() == Qt.LeftButton:
-            print('press')
+        self.current_arrow = None
+        self.start_item = None
+
+    def on_click(self, event):
+        item = self.itemAt(event.pos())
+
+        if not isinstance(item, BaseBlock): return
+
+        item.on_click(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+
+        if event.button() == Qt.RightButton:
+            self.connect_graph(event)
+            return
+        self.on_click(event)
 
 
-class PyMLibGUI(QMainWindow):
-
+class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.init_ui()
-        self.blocks.addItems(blocks)
 
-    def init_ui(self):
-        uic.loadUi("design.ui", self)
-        self.show()
+        self.outputs = []
+        self.algorithms = []
+        self.history = []
 
-    def dragEnterEvent(self, e):
-        e.accept()
+        self.setWindowTitle("PyMLibGUI")
+        self.setGeometry(500, 500, 900, 900)
 
-    def dropEvent(self, e):
-        position = e.pos()
-        self.button.move(position)
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        layout = QHBoxLayout(central_widget)
 
-        e.setDropAction(Qt.MoveAction)
-        e.accept()
+        # Block menu
+        self.left_panel = QVBoxLayout()
+        self.left_panel.setAlignment(Qt.AlignTop)
+        layout.addLayout(self.left_panel)
+
+        self.add_block_button(FeaturesInput)
+        self.add_block_button(TargetInput)
+        self.add_block_button(Output)
+
+        self.add_block_button(Algorithm, LinearRegression)
+        self.add_block_button(Algorithm, LogisticRegression)
+
+        # Bake button
+        button = QPushButton("Bake!")
+        button.clicked.connect(self.bake)
+        self.left_panel.addWidget(button, alignment=Qt.AlignBottom)
+
+        # Graph view
+        self.scene = QGraphicsScene()
+        self.view = GraphicsView(self.scene)
+        self.view.setSceneRect(0, 0, 600, 600)
+        layout.addWidget(self.view)
+
+    def bake(self):
+        if not self.outputs: return
+
+        for output in self.outputs:
+            predicted, target = self.do_magic(output, None)
+
+            pd.DataFrame({f"prediction_{i}": predicted[:, i] for i in range(predicted.shape[1])}).to_csv("predicted.csv", index=False)
+
+            print(mean_squared_error(predicted, target))
+
+    def do_magic(self, current_block, prev):
+        print(type(current_block).__name__, "->", end=" ")
+
+        for arrow in current_block.arrows:
+            start_block = arrow.start_item
+
+            print(type(start_block).__name__, " ->", end=" ")
+
+            if prev == start_block: return
+
+            if start_block.__block_type__ == BlockType.INPUT:
+                return start_block.run()
+
+            target = list(filter(lambda x: isinstance(x, TargetInput), start_block.inputs))[0].run()
+            inputs = list(filter(lambda x: not isinstance(x, TargetInput), start_block.inputs))
+
+            return start_block.run(target=target,
+                                   X=np.concatenate([self.do_magic(input, start_block) for input in inputs], axis=1)), target
+
+    def add_block_button(self, block_type: Type[BaseBlock], algorithm=None):
+        button = QPushButton(block_type.__block_name__ if not algorithm else algorithm.__name__)
+        button.clicked.connect(lambda: self.create_block(block_type, algorithm))
+        self.left_panel.addWidget(button)
+
+    def create_block(self, block_type: Type[BaseBlock], algorithm=None):
+        if algorithm:
+            block = block_type(0, 0, 200, 60, algorithm=algorithm)
+            block.set_text(algorithm.__name__)
+        else:
+            block = block_type(0, 0, 200, 60, )
+            block.set_text()
+            if block.__block_type__ == BlockType.OUTPUT:
+                self.outputs.append(block)
+
+        self.scene.addItem(block)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-    ex = PyMLibGUI()
-    ex.show()
-    app.exec_()
-
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec_())

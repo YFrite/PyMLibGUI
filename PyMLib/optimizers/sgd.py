@@ -1,4 +1,3 @@
-
 import numpy as np
 
 from PyMLib.optimizers.base import BaseOptimizer
@@ -13,13 +12,13 @@ class StochasticGradientDescent(BaseOptimizer):
 
     def step(self, X: np.ndarray | int,
              target: np.ndarray,
-             predicted: np.ndarray, epsilon: float = 1e-5) -> bool:
-        # grad = 4 * X ** 3
-        grad = -X.T.dot(target-predicted)
+             predicted: np.ndarray, epsilon: float = 1e-4) -> bool:
+
+        grad = -X.T.dot(target-predicted) / X.shape[0]
 
         if abs(grad).sum() <= epsilon:
-            print("stopped")
             return True
+
         self._weights -= self._learning_rate * grad
         return False
 
