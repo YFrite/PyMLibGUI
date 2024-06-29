@@ -1,7 +1,7 @@
-from PyMLib.regressions import LinearRegression
-from block.ai import AI
-from block.input import Input
-from block.output import Output
+from .features import FeaturesInput
+from .base import BaseBlock, BlockType
+from .algorithm import Algorithm
+from .target import TargetInput
+from .output import Output
 
-blocks = (AI(name="Линейная регрессия", algorithm=LinearRegression()),
-          Input(name="Входные данные"), Output(name="Выходные данные"))
+__all__ = ("FeaturesInput", "BaseBlock", "BlockType", "Algorithm", "TargetInput", "Output")

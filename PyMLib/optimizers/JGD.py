@@ -1,7 +1,6 @@
 import numpy as np
 
-from optimizers import StochasticGradientDescent
-
+from PyMLib.optimizers import StochasticGradientDescent
 
 class JumpingGradientDescent(StochasticGradientDescent):
 
